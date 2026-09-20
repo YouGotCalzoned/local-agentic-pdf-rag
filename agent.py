@@ -81,18 +81,16 @@ def run_agent(question: str):
         HumanMessage(content=question),
     ]
 
+    # Collect a structured execution trace for the UI.
+    trace = []
+
     for step in range(MAX_AGENT_STEPS):
 
         print(f"\n{'=' * 60}")
         print(f"AGENT STEP {step + 1}")
         print(f"{'=' * 60}")
 
-        # ----------------------------------------------------
-        # Ask the LLM what it wants to do next.
-        # ----------------------------------------------------
-
         response = llm_with_tools.invoke(messages)
-
         messages.append(response)
 
         print("\nLLM CONTENT:")
@@ -102,18 +100,30 @@ def run_agent(question: str):
         print(response.tool_calls)
 
         # ----------------------------------------------------
-        # No tool calls means the model has finished.
+        # No tool calls -> agent has finished.
         # ----------------------------------------------------
 
         if not response.tool_calls:
 
+            trace.append(
+                {
+                    "step": step + 1,
+                    "type": "final_answer",
+                    "content": response.content,
+                }
+            )
+
             print("\nFINAL ANSWER:")
             print(response.content)
 
-            return response.content
+            return {
+                "answer": response.content,
+                "trace": trace,
+                "completed": True,
+            }
 
         # ----------------------------------------------------
-        # Execute every requested tool.
+        # Execute requested tools.
         # ----------------------------------------------------
 
         for tool_call in response.tool_calls:
@@ -124,10 +134,6 @@ def run_agent(question: str):
 
             print(f"\nREQUESTED TOOL: {tool_name}")
             print(f"ARGUMENTS: {tool_args}")
-
-            # ------------------------------------------------
-            # Validate that the requested tool actually exists.
-            # ------------------------------------------------
 
             selected_tool = tool_registry.get(tool_name)
 
@@ -153,9 +159,16 @@ def run_agent(question: str):
             print("\nTOOL RESULT:")
             print(tool_result)
 
-            # ------------------------------------------------
-            # Return the observation to the LLM.
-            # ------------------------------------------------
+            # Record exactly what happened.
+            trace.append(
+                {
+                    "step": step + 1,
+                    "type": "tool_call",
+                    "tool": tool_name,
+                    "arguments": tool_args,
+                    "result": tool_result,
+                }
+            )
 
             messages.append(
                 ToolMessage(
@@ -164,16 +177,30 @@ def run_agent(question: str):
                 )
             )
 
-    # ========================================================
-    # Safety stop
-    # ========================================================
+    # --------------------------------------------------------
+    # Agent exceeded its allowed number of reasoning steps.
+    # --------------------------------------------------------
 
-    print("\nAgent reached maximum number of steps.")
-
-    return (
+    failure_message = (
         "I could not complete the request within "
         "the allowed number of tool-use steps."
     )
+
+    trace.append(
+        {
+            "step": MAX_AGENT_STEPS,
+            "type": "max_steps",
+            "content": failure_message,
+        }
+    )
+
+    print("\nAgent reached maximum number of steps.")
+
+    return {
+        "answer": failure_message,
+        "trace": trace,
+        "completed": False,
+    }
 
 
 # ============================================================

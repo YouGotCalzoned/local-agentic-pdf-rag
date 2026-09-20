@@ -1,578 +1,658 @@
-import time
-
 import streamlit as st
 
-from models import (
-    load_embeddings,
-    load_llm,
-)
-
-from document_service import (
-    process_uploaded_pdf,
-)
-
+from agent import run_agent
+from agent_runtime import agent_runtime
+from document_service import process_uploaded_pdf
+from models import load_embeddings, load_llm
 from rag import answer_question
 
-
 # ============================================================
-# PAGE CONFIGURATION
+# Page configuration
 # ============================================================
 
 st.set_page_config(
     page_title="Local Agentic PDF RAG",
-    page_icon="📚",
+    page_icon="📄",
     layout="wide",
+)
+
+st.title("Local Agentic PDF RAG")
+
+st.caption(
+    "Upload a PDF and query it using a fully local RAG pipeline "
+    "or an LLM agent with document tools."
 )
 
 
 # ============================================================
-# MODEL LOADING
+# Cached models
 # ============================================================
+
 
 @st.cache_resource
 def get_embeddings():
     """
-    Load embeddings only once per Streamlit process.
+    Load the embedding model once and reuse it across Streamlit reruns.
     """
-
     return load_embeddings()
 
 
 @st.cache_resource
 def get_llm():
     """
-    Create the Ollama client only once.
+    Load the Ollama LLM client once and reuse it across Streamlit reruns.
     """
-
     return load_llm()
 
 
-# ============================================================
-# HEADER
-# ============================================================
-
-st.title(
-    "📚 Local Agentic PDF RAG"
-)
-
-st.caption(
-    "Query PDFs using local embeddings, FAISS, "
-    "agentic retrieval, evidence attribution, "
-    "and a locally hosted LLM."
-)
-
-st.divider()
+embeddings = get_embeddings()
+llm = get_llm()
 
 
 # ============================================================
-# LOAD LOCAL MODELS
+# Session state
 # ============================================================
 
-with st.spinner(
-    "Loading local AI models..."
-):
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None
 
-    embeddings = get_embeddings()
+if "document_info" not in st.session_state:
+    st.session_state.document_info = None
 
-    llm = get_llm()
+if "uploaded_file_key" not in st.session_state:
+    st.session_state.uploaded_file_key = None
 
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
 
-# ============================================================
-# PDF UPLOAD
-# ============================================================
-
-uploaded_file = st.file_uploader(
-    "Upload a PDF",
-    type=["pdf"],
-)
+if "last_agent_answer" not in st.session_state:
+    st.session_state.last_agent_answer = None
 
 
 # ============================================================
-# DOCUMENT PROCESSING
+# Sidebar
+# ============================================================
+
+with st.sidebar:
+
+    st.header("Document")
+
+    uploaded_file = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"],
+    )
+
+    st.divider()
+
+    mode = st.radio(
+        "Mode",
+        options=[
+            "Verified RAG",
+            "Agent",
+        ],
+        help=(
+            "Verified RAG uses the existing retrieval, coverage, "
+            "evidence-selection and verification pipeline. "
+            "Agent mode lets the LLM choose tools dynamically."
+        ),
+    )
+
+    st.divider()
+
+    if st.session_state.document_info:
+
+        info = st.session_state.document_info
+
+        st.subheader("Loaded document")
+
+        st.write(f"**Name:** {info.get('name', 'Unknown')}")
+        st.write(f"**Pages:** {info.get('total_pages', 'Unknown')}")
+        st.write(f"**Non-empty pages:** " f"{info.get('non_empty_pages', 'Unknown')}")
+        st.write(f"**Chunks:** {info.get('chunks', 'Unknown')}")
+
+
+# ============================================================
+# Process uploaded document
 # ============================================================
 
 if uploaded_file is not None:
 
+    # The name + size combination is sufficient for our current
+    # single-document local application.
     current_file_key = (
         uploaded_file.name,
         uploaded_file.size,
     )
 
-    previous_file_key = (
-        st.session_state.get(
-            "file_key"
-        )
-    )
+    if current_file_key != st.session_state.uploaded_file_key:
 
-    # --------------------------------------------------------
-    # Only rebuild FAISS when the uploaded document changes.
-    # --------------------------------------------------------
-
-    if (
-        previous_file_key
-        != current_file_key
-    ):
-
-        with st.spinner(
-            "Reading, chunking, embedding, "
-            "and indexing PDF..."
-        ):
+        with st.status(
+            "Processing document...",
+            expanded=True,
+        ) as status:
 
             try:
 
-                (
-                    vector_store,
-                    document_info,
-                ) = process_uploaded_pdf(
+                st.write("Reading PDF...")
+                st.write("Chunking document...")
+                st.write("Creating embeddings...")
+                st.write("Building FAISS index...")
+
+                vector_store, document_info = process_uploaded_pdf(
                     uploaded_file,
                     embeddings,
                 )
 
-                st.session_state[
-                    "vector_store"
-                ] = vector_store
+                # ------------------------------------------------
+                # Store document state for the normal RAG pipeline.
+                # ------------------------------------------------
 
-                st.session_state[
-                    "document_info"
-                ] = document_info
+                st.session_state.vector_store = vector_store
+                st.session_state.document_info = document_info
+                st.session_state.uploaded_file_key = current_file_key
 
-                st.session_state[
-                    "file_key"
-                ] = current_file_key
+                # Clear previous answers because they belonged to
+                # another document.
+                st.session_state.last_result = None
+                st.session_state.last_agent_answer = None
 
-                # Clear answer from previous document.
-                st.session_state.pop(
-                    "rag_result",
-                    None,
+                # ------------------------------------------------
+                # IMPORTANT:
+                #
+                # Give the agent tools access to exactly the same
+                # vector store and metadata used by the UI.
+                # ------------------------------------------------
+
+                agent_runtime.set_document(
+                    vector_store=vector_store,
+                    document_info=document_info,
                 )
 
-                st.session_state.pop(
-                    "rag_elapsed",
-                    None,
+                status.update(
+                    label="Document ready",
+                    state="complete",
+                    expanded=False,
                 )
 
-                st.session_state.pop(
-                    "last_question",
-                    None,
+            except Exception as exc:
+
+                status.update(
+                    label="Document processing failed",
+                    state="error",
+                    expanded=True,
                 )
 
-            except Exception as error:
-
-                st.error(
-                    "Could not process the PDF."
-                )
-
-                st.exception(error)
-
+                st.error(str(exc))
                 st.stop()
 
 
-    # ========================================================
-    # DOCUMENT STATE
-    # ========================================================
+# ============================================================
+# Restore AgentRuntime after Streamlit reruns
+# ============================================================
 
-    document_info = (
-        st.session_state[
-            "document_info"
-        ]
+# Streamlit reruns this script whenever the user interacts with
+# widgets. The vector store lives in session_state, so make sure
+# AgentRuntime always points to the currently loaded document.
+
+if st.session_state.vector_store is not None:
+
+    agent_runtime.set_document(
+        vector_store=st.session_state.vector_store,
+        document_info=st.session_state.document_info,
     )
 
-    vector_store = (
-        st.session_state[
-            "vector_store"
-        ]
+
+# ============================================================
+# No document
+# ============================================================
+
+if st.session_state.vector_store is None:
+
+    st.info("Upload a PDF from the sidebar to begin.")
+
+    st.stop()
+
+
+# ============================================================
+# Document summary
+# ============================================================
+
+info = st.session_state.document_info
+
+st.success(
+    f"Loaded **{info.get('name', 'document')}** — "
+    f"{info.get('total_pages', '?')} pages, "
+    f"{info.get('chunks', '?')} indexed chunks."
+)
+
+
+# ============================================================
+# VERIFIED RAG MODE
+# ============================================================
+
+if mode == "Verified RAG":
+
+    st.header("Verified RAG")
+
+    st.caption(
+        "Uses evidence requirements, agentic retrieval, "
+        "coverage tracking, evidence attribution, context "
+        "budgeting and citation-scoped claim verification."
     )
 
+    with st.form("rag_question_form"):
 
-    # ========================================================
-    # DOCUMENT HEADER
-    # ========================================================
-
-    st.success(
-        "PDF indexed successfully."
-    )
-
-    st.subheader(
-        f"📄 {document_info['name']}"
-    )
-
-    column1, column2, column3 = (
-        st.columns(3)
-    )
-
-    with column1:
-
-        st.metric(
-            "PDF Pages",
-            document_info[
-                "total_pages"
-            ],
-        )
-
-    with column2:
-
-        st.metric(
-            "Pages With Text",
-            document_info[
-                "non_empty_pages"
-            ],
-        )
-
-    with column3:
-
-        st.metric(
-            "Chunks",
-            document_info[
-                "chunks"
-            ],
-        )
-
-    st.divider()
-
-
-    # ========================================================
-    # QUESTION FORM
-    # ========================================================
-
-    st.subheader(
-        "Ask your document"
-    )
-
-    # Using a form means pressing Enter or clicking Ask submits
-    # the question cleanly as one action.
-
-    with st.form(
-        "question_form"
-    ):
-
-        question = st.text_input(
-            "Question",
+        question = st.text_area(
+            "Ask a question about the document",
             placeholder=(
-                "Ask something about the uploaded PDF..."
+                "Example: What are the main ideas discussed " "in this document?"
             ),
+            height=100,
         )
 
-        ask_button = (
-            st.form_submit_button(
-                "Ask",
-                type="primary",
-            )
+        submitted = st.form_submit_button(
+            "Ask",
+            type="primary",
         )
 
+    if submitted:
 
-    # ========================================================
-    # RUN RAG
-    # ========================================================
+        if not question.strip():
 
-    if ask_button:
-
-        question = (
-            question.strip()
-        )
-
-        if not question:
-
-            st.warning(
-                "Enter a question first."
-            )
+            st.warning("Enter a question first.")
 
         else:
 
-            start_time = (
-                time.perf_counter()
-            )
+            with st.status(
+                "Running verified RAG pipeline...",
+                expanded=True,
+            ) as status:
 
-            try:
+                try:
 
-                with st.status(
-                    "Running agentic RAG...",
-                    expanded=True,
-                ) as status:
+                    st.write("Analyzing question...")
+                    st.write("Retrieving candidate evidence...")
+                    st.write("Evaluating evidence coverage...")
+                    st.write("Selecting generation evidence...")
+                    st.write("Generating grounded answer...")
+                    st.write("Verifying claims...")
 
-                    st.write(
-                        "🔎 Retrieving and evaluating evidence..."
+                    result = answer_question(
+                        llm=llm,
+                        vector_store=st.session_state.vector_store,
+                        embeddings=embeddings,
+                        question=question.strip(),
                     )
 
-                    st.write(
-                        "🧠 Planning follow-up searches when needed..."
-                    )
-
-                    st.write(
-                        "📚 Attributing evidence to requirements..."
-                    )
-
-                    st.write(
-                        "✍️ Generating and verifying the answer..."
-                    )
-
-                    rag_result = (
-                        answer_question(
-                            llm,
-                            vector_store,
-                            embeddings,
-                            question,
-                        )
-                    )
+                    st.session_state.last_result = result
 
                     status.update(
-                        label=(
-                            "RAG pipeline complete"
-                        ),
+                        label="Answer ready",
                         state="complete",
                         expanded=False,
                     )
 
-                elapsed = (
-                    time.perf_counter()
-                    - start_time
-                )
+                except Exception as exc:
 
-                st.session_state[
-                    "rag_result"
-                ] = rag_result
+                    status.update(
+                        label="RAG pipeline failed",
+                        state="error",
+                        expanded=True,
+                    )
 
-                st.session_state[
-                    "rag_elapsed"
-                ] = elapsed
+                    st.error(str(exc))
 
-                st.session_state[
-                    "last_question"
-                ] = question
+    # --------------------------------------------------------
+    # Render previous RAG result
+    # --------------------------------------------------------
 
-            except Exception as error:
+    result = st.session_state.last_result
 
-                st.error(
-                    "An error occurred while "
-                    "answering the question."
-                )
+    if result:
 
-                st.exception(error)
-
-
-    # ========================================================
-    # DISPLAY RESULT
-    # ========================================================
-
-    rag_result = (
-        st.session_state.get(
-            "rag_result"
-        )
-    )
-
-    if rag_result:
-
-        st.divider()
-
-        last_question = (
-            st.session_state.get(
-                "last_question"
-            )
-        )
-
-        if last_question:
-
-            st.caption(
-                "QUESTION"
-            )
-
-            st.markdown(
-                f"**{last_question}**"
-            )
-
-
-        # ====================================================
-        # ANSWER
-        # ====================================================
-
-        st.subheader(
-            "Answer"
-        )
+        st.subheader("Answer")
 
         st.markdown(
-            rag_result["answer"]
-        )
-
-        elapsed = (
-            st.session_state.get(
-                "rag_elapsed"
+            result.get(
+                "answer",
+                "No answer was generated.",
             )
         )
 
-        if elapsed is not None:
+        # ----------------------------------------------------
+        # Sources
+        # ----------------------------------------------------
 
-            st.caption(
-                f"⏱ Answered in "
-                f"{elapsed:.1f} seconds"
-            )
-
-
-        # ====================================================
-        # SOURCES
-        # ====================================================
-
-        sources = (
-            rag_result.get(
-                "sources",
-                [],
-            )
-        )
+        sources = result.get("sources") or []
 
         if sources:
 
             with st.expander(
-                f"Sources ({len(sources)})"
+                "Sources",
+                expanded=False,
             ):
 
                 for source in sources:
 
-                    source_id = (
-                        source.get(
-                            "id",
-                            "S?",
-                        )
+                    source_id = source.get(
+                        "source_id",
+                        source.get("id", "Source"),
                     )
 
-                    document_name = (
-                        source.get(
-                            "document",
-                            "Uploaded PDF",
-                        )
+                    page = source.get("page")
+
+                    text = source.get(
+                        "text",
+                        source.get("content", ""),
                     )
 
-                    page = (
-                        source.get(
-                            "page",
-                            "?",
-                        )
-                    )
+                    if page is not None:
+                        st.markdown(f"**{source_id} — Page {page}**")
+                    else:
+                        st.markdown(f"**{source_id}**")
 
-                    st.markdown(
-                        f"**[{source_id}]** "
-                        f"{document_name} "
-                        f"— Page {page}"
-                    )
+                    st.write(text)
 
+                    st.divider()
 
-        # ====================================================
-        # RAG DIAGNOSTICS
-        # ====================================================
+        # ----------------------------------------------------
+        # Diagnostics
+        # ----------------------------------------------------
 
         with st.expander(
-            "RAG diagnostics"
+            "RAG diagnostics",
+            expanded=False,
         ):
 
-            # -----------------------------------------------
-            # REQUIREMENTS
-            # -----------------------------------------------
+            requirements = result.get("requirements") or []
 
-            st.markdown(
-                "### Evidence requirements"
-            )
+            coverage_state = result.get("coverage_state") or {}
 
-            requirements = (
-                rag_result.get(
-                    "requirements",
-                    [],
-                )
-            )
+            verified_claims = result.get("verified_claims") or []
 
-            for requirement in (
-                requirements
-            ):
+            st.markdown("### Evidence requirements")
 
-                st.markdown(
-                    f"**{requirement['id']}** — "
-                    f"{requirement['requirement']}"
-                )
+            if requirements:
 
+                for requirement in requirements:
 
-            # -----------------------------------------------
-            # COVERAGE
-            # -----------------------------------------------
+                    # Requirements may currently be strings or
+                    # dictionaries depending on implementation.
+                    if isinstance(requirement, dict):
 
-            st.markdown(
-                "### Final coverage"
-            )
+                        requirement_id = requirement.get("id") or requirement.get(
+                            "requirement_id",
+                            "",
+                        )
 
-            coverage_state = (
-                rag_result.get(
-                    "coverage_state",
-                    [],
-                )
-            )
+                        requirement_text = requirement.get("text") or requirement.get(
+                            "requirement",
+                            str(requirement),
+                        )
 
-            for item in (
-                coverage_state
-            ):
+                        label = (
+                            f"{requirement_id}: " f"{requirement_text}"
+                            if requirement_id
+                            else requirement_text
+                        )
 
-                status = (
-                    item["status"]
-                )
+                    else:
 
-                if status == "COVERED":
+                        label = str(requirement)
 
-                    icon = "✅"
-
-                elif status == "PARTIAL":
-
-                    icon = "🟡"
-
-                else:
-
-                    icon = "❌"
-
-                st.markdown(
-                    f"{icon} "
-                    f"**{item['id']} — "
-                    f"{status}**"
-                )
-
-                st.caption(
-                    item[
-                        "requirement"
-                    ]
-                )
-
-
-            # -----------------------------------------------
-            # VERIFIED CLAIMS
-            # -----------------------------------------------
-
-            st.markdown(
-                "### Verified claims"
-            )
-
-            verified_claims = (
-                rag_result.get(
-                    "verified_claims",
-                    [],
-                )
-            )
-
-            if verified_claims:
-
-                for claim in (
-                    verified_claims
-                ):
-
-                    st.markdown(
-                        f"- {claim['claim']} "
-                        f"`[{claim['sources']}]`"
-                    )
+                    st.write(f"- {label}")
 
             else:
 
-                st.write(
-                    "No verified claims."
-                )
+                st.write("No requirements available.")
+
+            st.markdown("### Coverage")
+
+            if coverage_state:
+
+                for key, value in coverage_state.items():
+
+                    # Handle either a simple status string or
+                    # a richer coverage object.
+                    if isinstance(value, dict):
+                        status_value = value.get(
+                            "status",
+                            str(value),
+                        )
+                    else:
+                        status_value = str(value)
+
+                    normalized = status_value.upper()
+
+                    if normalized == "COVERED":
+                        icon = "✅"
+                    elif normalized == "PARTIAL":
+                        icon = "🟡"
+                    elif normalized == "MISSING":
+                        icon = "❌"
+                    else:
+                        icon = "•"
+
+                    st.write(f"{icon} **{key}** — " f"{status_value}")
+
+            else:
+
+                st.write("No coverage data available.")
+
+            st.markdown("### Verified claims")
+
+            if verified_claims:
+
+                for claim in verified_claims:
+
+                    if isinstance(claim, dict):
+
+                        claim_text = claim.get(
+                            "claim",
+                            str(claim),
+                        )
+
+                        claim_sources = claim.get(
+                            "sources",
+                            "",
+                        )
+
+                        if claim_sources:
+
+                            st.write(f"- {claim_text} " f"({claim_sources})")
+
+                        else:
+
+                            st.write(f"- {claim_text}")
+
+                    else:
+
+                        st.write(f"- {claim}")
+
+            else:
+
+                st.write("No verified claims available.")
 
 
 # ============================================================
-# EMPTY STATE
+# AGENT MODE
 # ============================================================
 
-else:
+elif mode == "Agent":
 
-    st.info(
-        "Upload a PDF to begin."
+    st.header("Tool-Calling Agent")
+
+    st.caption(
+        "The LLM dynamically chooses between document search, "
+        "document metadata and calculator tools."
     )
+
+    st.markdown("""
+Available tools:
+
+- **search_document** — semantic search over the uploaded PDF
+- **document_info** — metadata about the uploaded PDF
+- **calculator** — safe deterministic arithmetic
+""")
+
+    with st.form("agent_question_form"):
+
+        agent_question = st.text_area(
+            "Ask the agent",
+            placeholder=(
+                "Example: How many indexed chunks does this " "document have?"
+            ),
+            height=100,
+        )
+
+        agent_submitted = st.form_submit_button(
+            "Run agent",
+            type="primary",
+        )
+
+    if agent_submitted:
+
+        if not agent_question.strip():
+
+            st.warning("Enter a question first.")
+
+        else:
+
+            with st.status(
+                "Agent is working...",
+                expanded=True,
+            ) as status:
+
+                try:
+
+                    st.write("Giving the agent access to tools...")
+
+                    agent_result = run_agent(agent_question.strip())
+
+                    st.session_state.last_agent_answer = agent_result
+
+                    status.update(
+                        label="Agent finished",
+                        state="complete",
+                        expanded=False,
+                    )
+
+                except Exception as exc:
+
+                    status.update(
+                        label="Agent failed",
+                        state="error",
+                        expanded=True,
+                    )
+
+                    st.error(str(exc))
+
+    # --------------------------------------------------------
+    # Render previous agent answer
+    # --------------------------------------------------------
+
+    if st.session_state.last_agent_answer:
+
+        agent_result = st.session_state.last_agent_answer
+
+        # ========================================================
+        # Final answer
+        # ========================================================
+
+        st.subheader("Agent answer")
+
+        st.markdown(
+            agent_result.get(
+                "answer",
+                "No answer was generated.",
+            )
+        )
+
+        # ========================================================
+        # Agent execution trace
+        # ========================================================
+
+        trace = agent_result.get("trace", [])
+
+        with st.expander(
+            "Agent trace",
+            expanded=False,
+        ):
+
+            if not trace:
+
+                st.write("No trace information available.")
+
+            else:
+
+                for event in trace:
+
+                    step = event.get("step")
+                    event_type = event.get("type")
+
+                    # --------------------------------------------
+                    # Tool call
+                    # --------------------------------------------
+
+                    if event_type == "tool_call":
+
+                        tool_name = event.get(
+                            "tool",
+                            "unknown",
+                        )
+
+                        arguments = event.get(
+                            "arguments",
+                            {},
+                        )
+
+                        result = event.get(
+                            "result",
+                            {},
+                        )
+
+                        st.markdown(f"### Step {step} — `{tool_name}`")
+
+                        st.markdown("**Arguments**")
+
+                        st.json(arguments)
+
+                        st.markdown("**Result**")
+
+                        st.json(result)
+
+                    # --------------------------------------------
+                    # Final answer
+                    # --------------------------------------------
+
+                    elif event_type == "final_answer":
+
+                        st.markdown(f"### Step {step} — Final answer")
+
+                        st.write(event.get("content", ""))
+
+                    # --------------------------------------------
+                    # Max-step safety stop
+                    # --------------------------------------------
+
+                    elif event_type == "max_steps":
+
+                        st.markdown(f"### Step {step} — Safety stop")
+
+                        st.warning(event.get("content", ""))
+
+                    st.divider()
+
+    # ========================================================
+    # Completion state
+    # ========================================================
+
+        if not agent_result.get("completed", False):
+
+            st.warning("The agent stopped before completing " "the request.")
+
+        st.info(
+            "Agent mode is experimental. Tool selection and "
+            "planning are performed by the local LLM and may "
+            "not always follow the optimal tool sequence."
+        )
