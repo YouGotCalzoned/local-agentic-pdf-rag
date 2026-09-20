@@ -622,6 +622,46 @@ Available tools:
                         st.json(result)
 
                     # --------------------------------------------
+                    # Validation retry
+                    # --------------------------------------------
+
+                    elif event_type == "validation_retry":
+                    
+                        st.markdown(
+                            f"### Step {step} — Validation retry"
+                        )
+
+                        st.warning(
+                            event.get(
+                                "reason",
+                                "Agent response failed validation.",
+                            )
+                        )
+                    elif event_type == "validation_debug":
+
+                        st.markdown(
+                            f"### Step {step} — Validator"
+                        )
+
+                        st.json(
+                            {
+                                "decision": event.get("decision"),
+                                "arithmetic_required": event.get(
+                                    "arithmetic_required"
+                                ),
+                                "calculator_used": event.get(
+                                    "calculator_used"
+                                ),
+                                "retry_calculator": event.get(
+                                    "retry_calculator"
+                                ),
+                                "tools_used": event.get(
+                                    "tools_used",
+                                    [],
+                                ),
+                            }
+                        )
+                    # --------------------------------------------
                     # Final answer
                     # --------------------------------------------
 
@@ -641,6 +681,7 @@ Available tools:
 
                         st.warning(event.get("content", ""))
 
+                    
                     st.divider()
 
     # ========================================================

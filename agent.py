@@ -69,6 +69,60 @@ llm = ChatOllama(
 llm_with_tools = llm.bind_tools(tools)
 
 
+
+def validate_final_answer(
+    llm,
+    question: str,
+    tools_used: list[str],
+) -> dict:
+    """
+    Validate whether required deterministic arithmetic was performed
+    using the calculator tool.
+
+    The LLM decides only whether the user's request requires arithmetic.
+    Python deterministically checks whether calculator was actually used.
+    """
+
+    prompt = f"""
+You are validating an AI agent request.
+
+Original user question:
+{question}
+
+Determine whether answering the user's request requires arithmetic
+or numerical calculation.
+
+Return exactly one of:
+
+ARITHMETIC_REQUIRED
+NO_ARITHMETIC
+
+Do not provide any explanation.
+"""
+
+    response = llm.invoke(prompt)
+
+    decision = response.content.strip()
+
+    # Semantic judgment: let the LLM decide whether arithmetic is required.
+    arithmetic_required = decision == "ARITHMETIC_REQUIRED"
+
+    # Deterministic fact: Python knows exactly which tools were used.
+    calculator_used = "calculator" in tools_used
+
+    # Retry only when arithmetic is required AND calculator was not used.
+    retry_calculator = (
+        arithmetic_required
+        and not calculator_used
+    )
+
+    return {
+        "decision": decision,
+        "arithmetic_required": arithmetic_required,
+        "calculator_used": calculator_used,
+        "retry_calculator": retry_calculator,
+    }
+
 # ============================================================
 # Agent loop
 # ============================================================
@@ -83,6 +137,8 @@ def run_agent(question: str):
 
     # Collect a structured execution trace for the UI.
     trace = []
+    tools_used = []
+    calculator_retry_used = False
 
     for step in range(MAX_AGENT_STEPS):
 
@@ -104,6 +160,72 @@ def run_agent(question: str):
         # ----------------------------------------------------
 
         if not response.tool_calls:
+
+    # --------------------------------------------------------
+    # Validate whether the agent skipped the calculator.
+    # --------------------------------------------------------
+
+            validation = validate_final_answer(
+                llm=llm,
+                question=question,
+                tools_used=tools_used,
+            )
+
+            print("\nVALIDATION:")
+            print(validation)
+            trace.append(
+                {
+                    "step": step + 1,
+                    "type": "validation_debug",
+                    "decision": validation["decision"],
+                    "arithmetic_required": validation["arithmetic_required"],
+                    "calculator_used": validation["calculator_used"],
+                    "retry_calculator": validation["retry_calculator"],
+                    "tools_used": list(tools_used),
+                }
+            )
+            # --------------------------------------------------------
+            # If arithmetic was required but calculator was skipped,
+            # reject this answer and give the agent one retry.
+            # --------------------------------------------------------
+
+            if (
+                validation["retry_calculator"]
+                and not calculator_retry_used
+            ):
+
+                calculator_retry_used = True
+
+                trace.append(
+                    {
+                        "step": step + 1,
+                        "type": "validation_retry",
+                        "reason": (
+                            "Arithmetic was required but the "
+                            "calculator tool was not used."
+                        ),
+                    }
+                )
+
+                messages.append(
+                    HumanMessage(
+                        content=(
+                            "Your previous response cannot be accepted "
+                            "because arithmetic was required but you did "
+                            "not use the calculator tool. "
+                            "Use the calculator tool for the required "
+                            "calculation, then answer the original question."
+                        )
+                    )
+                )
+
+                # Continue around the agent loop.
+                continue
+
+            # --------------------------------------------------------
+            # Validation passed, or the single retry was already used.
+            # Accept the final response.
+            # --------------------------------------------------------
 
             trace.append(
                 {
@@ -129,6 +251,7 @@ def run_agent(question: str):
         for tool_call in response.tool_calls:
 
             tool_name = tool_call["name"]
+            tools_used.append(tool_name)
             tool_args = tool_call["args"]
             tool_call_id = tool_call["id"]
 
