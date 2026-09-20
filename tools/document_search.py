@@ -23,23 +23,48 @@ def search_document(query: str):
         }
 
     try:
-        results = agent_runtime.vector_store.similarity_search_with_score(
-            query,
-            k=4,
+        results = (
+            agent_runtime.vector_store.similarity_search_with_score(
+                query,
+                k=4,
+            )
         )
 
         passages = []
 
-        for index, (document, score) in enumerate(results, start=1):
+        for document, score in results:
 
             page = document.metadata.get("page")
 
-            # PyPDFLoader page metadata is zero-based.
-            display_page = page + 1 if isinstance(page, int) else None
+            display_page = (
+                page + 1
+                if isinstance(page, int)
+                else None
+            )
+
+            # Use the chunk's existing metadata if available.
+            chunk_id = document.metadata.get("chunk_id")
+
+            # Fall back to a deterministic page/content-based ID
+            # if the ingestion pipeline does not yet provide one.
+            if chunk_id is not None:
+                source_id = f"C{chunk_id}"
+            else:
+                source_id = (
+                    f"PAGE_{display_page}"
+                    if display_page is not None
+                    else "UNKNOWN"
+                )
 
             passages.append(
                 {
-                    "passage_id": f"P{index}",
+                    "source_id": source_id,
+                    "document": (
+                        agent_runtime.document_info.get(
+                            "name",
+                            "Unknown document",
+                        )
+                    ),
                     "page": display_page,
                     "distance": float(score),
                     "text": document.page_content,

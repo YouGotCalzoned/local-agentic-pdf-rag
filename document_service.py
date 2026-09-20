@@ -102,6 +102,8 @@ def chunk_pages(pages):
     Split pages into overlapping chunks.
 
     Page metadata is preserved automatically.
+    Each chunk is assigned a stable ID for the current
+    ingestion configuration.
     """
 
     text_splitter = (
@@ -111,11 +113,15 @@ def chunk_pages(pages):
         )
     )
 
-    return (
-        text_splitter.split_documents(
-            pages
-        )
+    chunks = text_splitter.split_documents(
+        pages
     )
+
+    # Assign a deterministic ID to every chunk.
+    for index, chunk in enumerate(chunks, start=1):
+        chunk.metadata["chunk_id"] = index
+
+    return chunks
 
 
 # ============================================================
