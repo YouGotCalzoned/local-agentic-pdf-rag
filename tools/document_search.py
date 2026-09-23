@@ -56,19 +56,28 @@ def search_document(query: str):
                     else "UNKNOWN"
                 )
 
-            passages.append(
-                {
-                    "source_id": source_id,
-                    "document": (
-                        agent_runtime.document_info.get(
-                            "name",
-                            "Unknown document",
-                        )
-                    ),
-                    "page": display_page,
-                    "distance": float(score),
-                    "text": document.page_content,
-                }
+            passage = {
+                "source_id": source_id,
+                "document": (
+                    agent_runtime.document_info.get(
+                        "name",
+                        "Unknown document",
+                    )
+                ),
+                "page": display_page,
+                "distance": float(score),
+                "text": document.page_content,
+            }
+
+    # Return the passage to the agent as before.
+            passages.append(passage)
+
+    # Also store it in the runtime evidence pool.
+    # source_id allows the runtime to deduplicate chunks
+    # retrieved by multiple searches.
+            agent_runtime.add_evidence(
+                source_id,
+                passage,
             )
 
         return {
