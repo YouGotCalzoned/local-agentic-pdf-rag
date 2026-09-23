@@ -102,28 +102,61 @@ Generation system.
 
 DO NOT answer the user's question.
 
-Your task is to determine what evidence would be required from
-the knowledge base to answer the ORIGINAL USER QUESTION fully.
+Your task is to identify the MINIMUM evidence requirements
+necessary to directly answer the ORIGINAL USER QUESTION.
 
 ORIGINAL USER QUESTION:
 
 {question}
 
-Break the question into the smallest useful set of evidence
-requirements.
+Create requirements ONLY for information explicitly requested
+or logically necessary to answer what was explicitly requested.
+
+SCOPE IS STRICT.
 
 Rules:
 
 - Produce at most {MAX_EVIDENCE_REQUIREMENTS} requirements.
-- Requirements must come from the user's actual question.
-- Do not introduce unrelated topics.
-- Do not require unnecessary detail.
-- A simple question may need only one requirement.
-- A multi-part or relationship question may require several.
+- Use the SMALLEST number of requirements necessary.
+- A simple factual question should normally produce EXACTLY
+  ONE requirement.
+- Create multiple requirements only when the user's question
+  explicitly asks for multiple distinct things or asks about
+  relationships between multiple concepts.
+- Requirements must come directly from the user's actual question.
+- DO NOT expand the scope to related topics.
+- DO NOT introduce additional dimensions such as phases,
+  categories, comparisons, causes, effects, implementation
+  details, examples, exceptions, or recommendations unless
+  the user explicitly asks for them.
+- DO NOT create a requirement merely because that information
+  could make the answer more comprehensive.
+- DO NOT create requirements for information that would be
+  interesting or useful but is not necessary to answer the
+  question.
 - Each requirement should describe evidence that could be
-  supported by a passage from the source.
+  supported by the source.
 - Do not answer the question.
 - Do not generate search queries yet.
+
+Examples:
+
+Question:
+"What should be the weekly mileage for a marathon?"
+
+R1: What weekly marathon training mileage does the source recommend?
+
+Question:
+"What is cumulative fatigue?"
+
+R1: How does the source define cumulative fatigue?
+
+Question:
+"Explain how weekly mileage and cumulative fatigue relate."
+
+R1: What does the source say about weekly mileage?
+R2: What does the source say about cumulative fatigue?
+R3: How does the source connect weekly mileage with cumulative fatigue?
 
 Return EXACTLY this format:
 
@@ -131,7 +164,8 @@ R1: <requirement>
 R2: <requirement>
 R3: <requirement>
 
-Continue only as far as needed.
+Continue only as far as necessary.
+
 """
 
     response_text = invoke_llm(
@@ -440,6 +474,291 @@ R3|MISSING|short reason
 
     return coverage_state
 
+
+def evaluate_agent_requirement_coverage(
+    llm,
+    question,
+    requirements,
+    context,
+    valid_evidence_ids,
+):
+    """
+    Evaluate whether the accumulated agent evidence is
+    sufficient to answer each evidence requirement.
+
+    Unlike the standard coverage evaluator, this evaluator
+    considers evidence across multiple passages collectively.
+
+    Each requirement receives one status:
+
+        COVERED
+        PARTIAL
+        MISSING
+
+    COVERED:
+        The accumulated evidence is sufficient to answer the
+        requirement faithfully.
+
+    PARTIAL:
+        Useful evidence exists, but important information
+        needed to answer the requirement is still absent.
+
+    MISSING:
+        The accumulated evidence does not provide useful
+        support for the requirement.
+
+    The LLM makes the semantic judgment.
+
+    Python owns the requirement IDs and state.
+    """
+
+    requirements_text = (
+        format_requirements(
+            requirements
+        )
+    )
+
+    prompt = f"""
+You are evaluating evidence coverage for an agentic
+Retrieval-Augmented Generation system.
+
+DO NOT answer the user's question.
+
+ORIGINAL USER QUESTION:
+
+{question}
+
+
+EVIDENCE REQUIREMENTS:
+
+{requirements_text}
+
+
+ACCUMULATED RETRIEVED EVIDENCE:
+
+{context}
+
+
+For EACH evidence requirement, determine whether the accumulated
+retrieved evidence contains enough information to answer that
+requirement faithfully.
+
+Evaluate the accumulated evidence AS A WHOLE.
+
+Evidence supporting a requirement may be distributed across
+multiple passages. A requirement does not need to be completely
+supported by a single passage.
+
+Allowed statuses:
+
+COVERED
+- The accumulated evidence contains enough information to
+  answer the requirement faithfully.
+- Supporting information may come from one passage or multiple
+  passages considered together.
+
+PARTIAL
+- Useful evidence exists, but an important part of the
+  requirement cannot yet be answered.
+- Additional retrieval would materially improve the answer.
+
+MISSING
+- The accumulated evidence does not contain useful information
+  supporting the requirement.
+
+Important rules:
+
+- Judge ONLY from ACCUMULATED RETRIEVED EVIDENCE.
+- Do not use pretrained knowledge.
+- Do not invent facts.
+- Do not answer the original question.
+- Preserve the requirement IDs exactly.
+- Every evidence ID must be one of the Cxxx source IDs shown
+  in ACCUMULATED RETRIEVED EVIDENCE.
+- If status is COVERED, you MUST identify at least one
+  supporting evidence ID.
+- If status is PARTIAL, identify the evidence IDs that provide
+  the partial support.
+- If status is MISSING, use NONE.
+- Do not mark something PARTIAL merely because additional
+  detail could theoretically be retrieved.
+- Combine evidence across passages when appropriate.
+
+Return EXACTLY one line per requirement using this format:
+
+R1|COVERED|C12,C15|short reason
+R2|PARTIAL|C22|short reason
+R3|MISSING|NONE|short reason
+"""
+
+    response_text = invoke_llm(
+        llm,
+        prompt,
+    )
+
+    parsed_statuses = {}
+
+    for line in response_text.splitlines():
+
+        line = line.strip()
+
+        parts = line.split(
+            "|",
+            3,
+        )
+
+
+        if len(parts) < 3:
+            continue
+
+        requirement_id = (
+            parts[0]
+            .strip()
+            .upper()
+        )
+
+        status = (
+            parts[1]
+            .strip()
+            .upper()
+        )
+
+        evidence_text = (
+            parts[2]
+            .strip()
+            .upper()
+        )
+
+        reason = ""
+
+        if len(parts) == 4:
+            reason = parts[3].strip()
+
+        if status not in {
+            "COVERED",
+            "PARTIAL",
+            "MISSING",
+        }:
+            continue
+
+
+        # --------------------------------------------------------
+        # Extract stable Cxxx evidence IDs claimed by the LLM.
+        # --------------------------------------------------------
+
+        evidence_ids = re.findall(
+            r"\bC\d+\b",
+            evidence_text,
+            flags=re.IGNORECASE,
+        )
+
+        evidence_ids = [
+            evidence_id.upper()
+            for evidence_id in evidence_ids
+        ]
+
+
+        # --------------------------------------------------------
+        # Remove duplicate IDs while preserving order.
+        # --------------------------------------------------------
+
+        evidence_ids = list(
+            dict.fromkeys(
+                evidence_ids
+            )
+        )
+
+        # --------------------------------------------------------
+        # Python validates the evidence IDs claimed by the LLM.
+        #
+        # The model may select evidence semantically, but it may
+        # not invent sources that are not in accumulated evidence.
+        # --------------------------------------------------------
+
+        valid_evidence_ids = set(
+            valid_evidence_ids
+        )
+
+        evidence_ids = [
+            evidence_id
+            for evidence_id in evidence_ids
+            if evidence_id in valid_evidence_ids
+        ]
+
+        # --------------------------------------------------------
+        # COVERED without actual supporting evidence is invalid.
+        #
+        # Downgrade it to MISSING rather than allowing an
+        # unsupported COVERED state into the controller.
+        # --------------------------------------------------------
+
+        if (
+            status == "COVERED"
+            and not evidence_ids
+        ):
+            status = "MISSING"
+
+            reason = (
+                "Coverage evaluator claimed COVERED "
+                "without valid supporting evidence."
+            )
+
+        parsed_statuses[
+            requirement_id
+        ] = {
+            "status": status,
+            "evidence_ids": evidence_ids,
+            "reason": reason,
+        }
+
+
+    # --------------------------------------------------------
+    # Build deterministic state using OUR requirement list.
+    #
+    # The LLM cannot add/remove requirement IDs.
+    # --------------------------------------------------------
+
+    coverage_state = []
+
+    for requirement in requirements:
+
+        requirement_id = (
+            requirement["id"]
+        )
+
+        parsed = parsed_statuses.get(
+            requirement_id,
+            {
+                "status": "MISSING",
+                "evidence_ids": [],
+                "reason": (
+                    "Planner did not return "
+                    "a valid coverage decision."
+                ),
+            },
+        )
+
+        coverage_state.append(
+            {
+                "id": requirement_id,
+                "requirement": (
+                    requirement[
+                        "requirement"
+                    ]
+                ),
+                "status": (
+                    parsed["status"]
+                ),
+                "evidence_ids": (
+                    parsed["evidence_ids"]
+                ),
+                "reason": (
+                    parsed["reason"]
+                ),
+            }
+        )
+
+    return coverage_state
 
 # ============================================================
 # COVERAGE HELPERS

@@ -611,6 +611,16 @@ Available tools:
                             {},
                         )
 
+                        new_evidence_ids = event.get(
+                            "new_evidence_ids",
+                            [],
+                        )
+
+                        stagnant_searches = event.get(
+                            "consecutive_stagnant_searches",
+                            0,
+                        )
+
                         st.markdown(f"### Step {step} — `{tool_name}`")
 
                         st.markdown("**Arguments**")
@@ -620,6 +630,230 @@ Available tools:
                         st.markdown("**Result**")
 
                         st.json(result)
+
+                        if tool_name == "search_document":
+
+                            st.markdown(
+                                "**Retrieval diagnostics**"
+                            )
+
+                            if new_evidence_ids:
+
+                                st.write(
+                                    "New evidence: "
+                                    + ", ".join(
+                                        new_evidence_ids
+                                    )
+                                )
+
+                            else:
+
+                                st.write(
+                                    "New evidence: None"
+                                )
+
+                            st.write(
+                                "Consecutive stagnant searches: "
+                                f"{stagnant_searches}"
+                            )
+
+                    # --------------------------------------------
+                    # Evidence coverage check
+                    # --------------------------------------------
+
+                    elif event_type == "coverage_check":
+
+                        st.markdown(
+                            f"### Step {step} — Evidence coverage"
+                        )
+
+                        requirements = event.get(
+                            "requirements",
+                            [],
+                        )
+
+                        coverage = event.get(
+                            "coverage",
+                            {},
+                        )
+
+                        complete = event.get(
+                            "complete",
+                            False,
+                        )
+
+                        evidence_ids = event.get(
+                            "evidence_ids",
+                            [],
+                        )
+
+                        # ----------------------------------------
+                        # Requirements
+                        # ----------------------------------------
+
+                        st.markdown("**Requirements**")
+
+                        if requirements:
+
+                            for requirement in requirements:
+
+                                if isinstance(requirement, dict):
+
+                                    requirement_id = requirement.get(
+                                        "id",
+                                        requirement.get(
+                                            "requirement_id",
+                                            "",
+                                        ),
+                                    )
+
+                                    requirement_text = requirement.get(
+                                        "text",
+                                        requirement.get(
+                                            "requirement",
+                                            str(requirement),
+                                        ),
+                                    )
+
+                                    if requirement_id:
+                                        st.write(
+                                            f"- **{requirement_id}**: "
+                                            f"{requirement_text}"
+                                        )
+                                    else:
+                                        st.write(
+                                            f"- {requirement_text}"
+                                        )
+
+                                else:
+
+                                    st.write(
+                                        f"- {requirement}"
+                                    )
+
+                        else:
+
+                            st.write(
+                                "No evidence requirements available."
+                            )
+
+                        # ----------------------------------------
+                        # Coverage state
+                        # ----------------------------------------
+
+                        st.markdown("**Coverage state**")
+
+                        if coverage:
+
+                            for item in coverage:
+
+                                if isinstance(item, dict):
+
+                                    requirement_id = item.get(
+                                        "id",
+                                        item.get(
+                                            "requirement_id",
+                                            "?",
+                                        ),
+                                    )
+
+                                    requirement_text = item.get(
+                                        "requirement",
+                                        item.get(
+                                            "text",
+                                            "",
+                                        ),
+                                    )
+
+                                    status_value = item.get(
+                                        "status",
+                                        "UNKNOWN",
+                                    )
+
+                                    item_evidence_ids = item.get(
+                                        "evidence_ids",
+                                        [],
+                                    )
+
+                                    reason = item.get(
+                                        "reason",
+                                        "",
+                                    )
+
+                                else:
+
+                                    requirement_id = "?"
+                                    requirement_text = ""
+                                    status_value = str(item)
+                                    item_evidence_ids = []
+                                    reason = ""
+
+                                normalized = status_value.upper()
+
+                                if normalized == "COVERED":
+                                    icon = "✅"
+                                elif normalized == "PARTIAL":
+                                    icon = "🟡"
+                                elif normalized == "MISSING":
+                                    icon = "❌"
+                                else:
+                                    icon = "•"
+
+                                st.write(
+                                    f"{icon} **{requirement_id}** — "
+                                    f"{status_value}"
+                                )
+
+                                if requirement_text:
+                                    st.caption(requirement_text)
+
+                                if item_evidence_ids:
+                                    st.caption(
+                                        "Evidence: "
+                                        + ", ".join(
+                                            item_evidence_ids
+                                        )
+                                    )
+
+                                if reason:
+                                    st.caption(
+                                        f"Reason: {reason}"
+                                    )
+
+                        else:
+
+                            st.write(
+                                "No coverage state available."
+                            )
+
+                        # ----------------------------------------
+                        # Evidence accumulated so far
+                        # ----------------------------------------
+
+                        st.markdown("**Accumulated evidence**")
+
+                        if evidence_ids:
+                            st.write(
+                                ", ".join(evidence_ids)
+                            )
+                        else:
+                            st.write(
+                                "No document evidence accumulated."
+                            )
+
+                        # ----------------------------------------
+                        # Completion decision
+                        # ----------------------------------------
+
+                        if complete:
+                            st.success(
+                                "All evidence requirements are covered."
+                            )
+                        else:
+                            st.warning(
+                                "Evidence coverage is incomplete. "
+                                "The agent must continue searching."
+                            )
 
                     # --------------------------------------------
                     # Validation retry
@@ -680,6 +914,33 @@ Available tools:
                         st.markdown(f"### Step {step} — Safety stop")
 
                         st.warning(event.get("content", ""))
+
+                    elif event_type == "best_effort_synthesis":
+
+                        st.markdown(
+                            f"### Step {event['step']} — "
+                            "Grounded synthesis"
+                        )
+
+                        st.caption(
+                            "The retrieval budget was exhausted. "
+                            "The agent generated the final answer from "
+                            "the accumulated document evidence."
+                        )
+
+                        st.write(event["content"])
+
+                        evidence_ids = event.get(
+                            "evidence_ids",
+                            [],
+                        )
+
+                        if evidence_ids:
+
+                            st.caption(
+                                "Evidence used: "
+                                + ", ".join(evidence_ids)
+                            )
 
                     
                     st.divider()
