@@ -238,6 +238,76 @@ def merge_monotonic_coverage(
             merged.append(previous_item)
 
     return merged
+
+def generate_best_effort_answer(
+    question,
+    evidence,
+    coverage_state,
+):
+    """
+    Generate the strongest grounded answer possible when the
+    agent reaches its reasoning/retrieval budget before all
+    evidence requirements are marked COVERED.
+    """
+
+    evidence_context = build_agent_evidence_context(
+        evidence
+    )
+
+    coverage_text = "\n".join(
+        (
+            f"- {item['id']} [{item['status']}]: "
+            f"{item['requirement']}"
+        )
+        for item in coverage_state
+    )
+
+    prompt = f"""
+You are generating the final answer for a
+Retrieval-Augmented Generation system.
+
+The retrieval agent has reached its search budget.
+
+Answer the ORIGINAL USER QUESTION using ONLY the accumulated
+retrieved evidence below.
+
+ORIGINAL USER QUESTION:
+
+{question}
+
+
+CURRENT EVIDENCE COVERAGE:
+
+{coverage_text}
+
+
+ACCUMULATED RETRIEVED EVIDENCE:
+
+{evidence_context}
+
+
+Rules:
+
+- Give the strongest useful answer supported by the evidence.
+- Use ONLY information contained in the accumulated evidence.
+- Do not use outside or pretrained knowledge.
+- Do not invent information to fill gaps.
+- Some evidence requirements may still be PARTIAL or MISSING.
+- PARTIAL does not mean the available evidence is useless.
+  Use whatever that evidence supports.
+- If an important part of the original question genuinely
+  cannot be answered from the evidence, state that limitation
+  briefly.
+- Do not discuss the retrieval process, coverage evaluator,
+  search budget, or internal requirement IDs.
+- Do not mention that you are producing a "best-effort" answer.
+- Answer the user naturally and directly.
+"""
+
+    response = llm.invoke(prompt)
+
+    return response.content
+
 # ============================================================
 # Agent loop
 # ============================================================
@@ -249,23 +319,24 @@ def run_agent(question: str):
     # Evidence from a previous question must never leak
     # into the current question.
     agent_runtime.reset_evidence()
+
     # Track document searches attempted during this agent run.
-    # The planner can use this history to avoid suggesting
-    # the same retrieval query repeatedly.
     previous_searches = []
+
+    # Track consecutive document searches that produce
+    # no new unique evidence.
+    consecutive_stagnant_searches = 0
+
     # Persist the strongest coverage state reached for each
     # requirement during this agent run.
-    #
-    # Coverage is monotonic:
-    # MISSING -> PARTIAL -> COVERED
-    # It is never allowed to move backwards.
-    best_coverage_state = {}
+    best_coverage_state = []
+
     # Build an explicit evidence plan for the original question.
-    # These requirements remain fixed throughout this agent run.
     requirements = derive_evidence_requirements(
         llm,
         question,
     )
+
     messages = [
         SystemMessage(content=AGENT_SYSTEM_PROMPT),
         HumanMessage(content=question),
@@ -292,26 +363,23 @@ def run_agent(question: str):
         print(response.tool_calls)
 
         # ----------------------------------------------------
-        # No tool calls -> agent has finished.
+        # No tool calls -> agent has proposed a final answer.
         # ----------------------------------------------------
 
         if not response.tool_calls:
 
-
-            # --------------------------------------------------------
-    # DOCUMENT EVIDENCE COVERAGE CHECK
-    #
-    # If the agent used document search, do not automatically
-    # accept its final answer. First check whether the evidence
-    # gathered so far covers the original evidence requirements.
-    # --------------------------------------------------------
+            # ------------------------------------------------
+            # DOCUMENT EVIDENCE COVERAGE CHECK
+            # ------------------------------------------------
 
             if "search_document" in tools_used:
 
                 evidence = agent_runtime.get_evidence()
 
-                evidence_context = build_agent_evidence_context(
-                    evidence
+                evidence_context = (
+                    build_agent_evidence_context(
+                        evidence
+                    )
                 )
 
                 valid_evidence_ids = {
@@ -319,23 +387,29 @@ def run_agent(question: str):
                     for passage in evidence
                 }
 
-                new_coverage_state = evaluate_agent_requirement_coverage(
-                    llm=llm,
-                    question=question,
-                    requirements=requirements,
-                    context=evidence_context,
-                    valid_evidence_ids=valid_evidence_ids,
+                new_coverage_state = (
+                    evaluate_agent_requirement_coverage(
+                        llm=llm,
+                        question=question,
+                        requirements=requirements,
+                        context=evidence_context,
+                        valid_evidence_ids=valid_evidence_ids,
+                    )
                 )
 
-                best_coverage_state = merge_monotonic_coverage(
-                    previous_state=best_coverage_state,
-                    new_state=new_coverage_state,
+                best_coverage_state = (
+                    merge_monotonic_coverage(
+                        previous_state=best_coverage_state,
+                        new_state=new_coverage_state,
+                    )
                 )
 
                 coverage_state = best_coverage_state
 
-                coverage_complete = all_requirements_covered(
-                    coverage_state
+                coverage_complete = (
+                    all_requirements_covered(
+                        coverage_state
+                    )
                 )
 
                 trace.append(
@@ -354,8 +428,10 @@ def run_agent(question: str):
 
                 if not coverage_complete:
 
-                    uncovered = get_uncovered_requirements(
-                        coverage_state
+                    uncovered = (
+                        get_uncovered_requirements(
+                            coverage_state
+                        )
                     )
 
                     missing_text = "\n".join(
@@ -367,15 +443,14 @@ def run_agent(question: str):
                         for item in uncovered
                     )
 
-                    # Ask the planner for focused retrieval directions.
-                    # The planner sees what is still missing and what
-                    # searches have already been attempted.
-                    follow_up_searches = plan_follow_up_searches(
-                        llm=llm,
-                        question=question,
-                        coverage_state=coverage_state,
-                        context=evidence_context,
-                        previous_searches=previous_searches,
+                    follow_up_searches = (
+                        plan_follow_up_searches(
+                            llm=llm,
+                            question=question,
+                            coverage_state=coverage_state,
+                            context=evidence_context,
+                            previous_searches=previous_searches,
+                        )
                     )
 
                     planned_search_text = "\n".join(
@@ -409,9 +484,9 @@ def run_agent(question: str):
 
                     continue
 
-    # --------------------------------------------------------
-    # Validate whether the agent skipped the calculator.
-    # --------------------------------------------------------
+            # ------------------------------------------------
+            # Validate whether the agent skipped calculator.
+            # ------------------------------------------------
 
             validation = validate_final_answer(
                 llm=llm,
@@ -421,21 +496,24 @@ def run_agent(question: str):
 
             print("\nVALIDATION:")
             print(validation)
+
             trace.append(
                 {
                     "step": step + 1,
                     "type": "validation_debug",
                     "decision": validation["decision"],
-                    "arithmetic_required": validation["arithmetic_required"],
-                    "calculator_used": validation["calculator_used"],
-                    "retry_calculator": validation["retry_calculator"],
+                    "arithmetic_required": (
+                        validation["arithmetic_required"]
+                    ),
+                    "calculator_used": (
+                        validation["calculator_used"]
+                    ),
+                    "retry_calculator": (
+                        validation["retry_calculator"]
+                    ),
                     "tools_used": list(tools_used),
                 }
             )
-            # --------------------------------------------------------
-            # If arithmetic was required but calculator was skipped,
-            # reject this answer and give the agent one retry.
-            # --------------------------------------------------------
 
             if (
                 validation["retry_calculator"]
@@ -467,13 +545,11 @@ def run_agent(question: str):
                     )
                 )
 
-                # Continue around the agent loop.
                 continue
 
-            # --------------------------------------------------------
-            # Validation passed, or the single retry was already used.
-            # Accept the final response.
-            # --------------------------------------------------------
+            # ------------------------------------------------
+            # Accept final response.
+            # ------------------------------------------------
 
             trace.append(
                 {
@@ -482,7 +558,6 @@ def run_agent(question: str):
                     "content": response.content,
                 }
             )
-
 
             print(
                 "ACCUMULATED AGENT EVIDENCE:",
@@ -509,32 +584,141 @@ def run_agent(question: str):
 
             tool_name = tool_call["name"]
             tools_used.append(tool_name)
+
             tool_args = tool_call["args"]
             tool_call_id = tool_call["id"]
 
             print(f"\nREQUESTED TOOL: {tool_name}")
             print(f"ARGUMENTS: {tool_args}")
 
-            selected_tool = tool_registry.get(tool_name)
+            selected_tool = tool_registry.get(
+                tool_name
+            )
+
+            # Values used by retrieval diagnostics.
+            new_evidence_ids = set()
+            stagnation_message = None
 
             if selected_tool is None:
 
                 tool_result = {
                     "success": False,
-                    "error": f"Unknown tool: {tool_name}",
+                    "error": (
+                        f"Unknown tool: {tool_name}"
+                    ),
                 }
 
             else:
 
                 try:
-                    tool_result = selected_tool.invoke(tool_args)
+
+                    # ----------------------------------------
+                    # Snapshot evidence BEFORE retrieval.
+                    # ----------------------------------------
+
+                    evidence_ids_before = set()
+
                     if tool_name == "search_document":
 
-                        search_query = tool_args.get("query")
+                        evidence_ids_before = {
+                            item["source_id"]
+                            for item in (
+                                agent_runtime.get_evidence()
+                            )
+                        }
+
+                    # ----------------------------------------
+                    # Execute tool.
+                    # ----------------------------------------
+
+                    tool_result = (
+                        selected_tool.invoke(
+                            tool_args
+                        )
+                    )
+
+                    # ----------------------------------------
+                    # Document-search bookkeeping.
+                    # ----------------------------------------
+
+                    if tool_name == "search_document":
+
+                        search_query = (
+                            tool_args.get("query")
+                        )
 
                         if search_query:
+
                             previous_searches.append(
                                 search_query
+                            )
+
+                        evidence_ids_after = {
+                            item["source_id"]
+                            for item in (
+                                agent_runtime.get_evidence()
+                            )
+                        }
+
+                        new_evidence_ids = (
+                            evidence_ids_after
+                            - evidence_ids_before
+                        )
+
+                        # ------------------------------------
+                        # STAGNATION DETECTION
+                        # ------------------------------------
+
+                        if new_evidence_ids:
+
+                            consecutive_stagnant_searches = 0
+
+                        else:
+
+                            consecutive_stagnant_searches += 1
+
+                            uncovered_requirements = []
+
+                            if best_coverage_state:
+
+                                uncovered_requirements = (
+                                    get_uncovered_requirements(
+                                        best_coverage_state
+                                    )
+                                )
+
+                            uncovered_text = "\n".join(
+                                (
+                                    f"- {item['id']} "
+                                    f"[{item['status']}]: "
+                                    f"{item['requirement']}"
+                                )
+                                for item
+                                in uncovered_requirements
+                            )
+
+                            stagnation_message = (
+                                "The previous document search "
+                                "produced no new evidence. "
+                                "All retrieved passages were "
+                                "already present in the "
+                                "accumulated evidence.\n\n"
+
+                                "Do NOT repeat this search or "
+                                "continue searching the same "
+                                "requirement using only slightly "
+                                "different wording.\n\n"
+
+                                "The requirements that are still "
+                                "PARTIAL or MISSING are:\n"
+                                f"{uncovered_text}\n\n"
+
+                                "Choose a DIFFERENT uncovered "
+                                "requirement and perform one "
+                                "focused search for evidence "
+                                "supporting that requirement. "
+                                "Do not answer the original "
+                                "question yet."
                             )
 
                 except Exception as exc:
@@ -547,7 +731,22 @@ def run_agent(question: str):
             print("\nTOOL RESULT:")
             print(tool_result)
 
+            if tool_name == "search_document":
+
+                print(
+                    "NEW EVIDENCE IDS:",
+                    sorted(new_evidence_ids),
+                )
+
+                print(
+                    "CONSECUTIVE STAGNANT SEARCHES:",
+                    consecutive_stagnant_searches,
+                )
+
+            # ------------------------------------------------
             # Record exactly what happened.
+            # ------------------------------------------------
+
             trace.append(
                 {
                     "step": step + 1,
@@ -555,8 +754,26 @@ def run_agent(question: str):
                     "tool": tool_name,
                     "arguments": tool_args,
                     "result": tool_result,
+                    "new_evidence_ids": (
+                        sorted(new_evidence_ids)
+                        if tool_name == "search_document"
+                        else []
+                    ),
+                    "consecutive_stagnant_searches": (
+                        consecutive_stagnant_searches
+                        if tool_name == "search_document"
+                        else 0
+                    ),
                 }
             )
+
+            # ------------------------------------------------
+            # IMPORTANT:
+            #
+            # The ToolMessage must come immediately after
+            # the AI's tool call. Only AFTER satisfying the
+            # tool call do we inject the controller message.
+            # ------------------------------------------------
 
             messages.append(
                 ToolMessage(
@@ -565,13 +782,82 @@ def run_agent(question: str):
                 )
             )
 
+            if stagnation_message:
+
+                messages.append(
+                    HumanMessage(
+                        content=stagnation_message
+                    )
+                )
+
     # --------------------------------------------------------
-    # Agent exceeded its allowed number of reasoning steps.
+    # Agent reached its reasoning/retrieval budget.
+    #
+    # Do not discard useful accumulated evidence simply because
+    # one or more semantic requirements remain PARTIAL/MISSING.
+    # Produce the strongest grounded answer possible.
+    # --------------------------------------------------------
+
+    evidence = agent_runtime.get_evidence()
+
+    if evidence:
+
+        print(
+            "\nAgent reached maximum number of steps. "
+            "Generating grounded best-effort answer."
+        )
+
+        final_answer = generate_best_effort_answer(
+            question=question,
+            evidence=evidence,
+            coverage_state=best_coverage_state,
+        )
+
+        coverage_complete = (
+            all_requirements_covered(
+                best_coverage_state
+            )
+            if best_coverage_state
+            else False
+        )
+
+        trace.append(
+            {
+                "step": MAX_AGENT_STEPS,
+                "type": "best_effort_synthesis",
+                "content": final_answer,
+                "coverage": best_coverage_state,
+                "coverage_complete": coverage_complete,
+                "evidence_ids": [
+                    item["source_id"]
+                    for item in evidence
+                ],
+                "termination_reason": "search_budget_exhausted",
+            }
+        )
+
+        print("\nBEST-EFFORT FINAL ANSWER:")
+        print(final_answer)
+
+        return {
+            "answer": final_answer,
+            "trace": trace,
+            "completed": True,
+            "coverage_complete": coverage_complete,
+            "termination_reason": "search_budget_exhausted",
+        }
+
+
+    # --------------------------------------------------------
+    # No document evidence was gathered at all.
+    #
+    # In this situation grounded synthesis is impossible, so a
+    # real failure is appropriate.
     # --------------------------------------------------------
 
     failure_message = (
-        "I could not complete the request within "
-        "the allowed number of tool-use steps."
+        "I could not find enough document evidence "
+        "to answer the request."
     )
 
     trace.append(
@@ -582,43 +868,15 @@ def run_agent(question: str):
         }
     )
 
-    print("\nAgent reached maximum number of steps.")
+    print(
+        "\nAgent reached maximum number of steps "
+        "without retrieving document evidence."
+    )
 
     return {
         "answer": failure_message,
         "trace": trace,
         "completed": False,
+        "coverage_complete": False,
+        "termination_reason": "no_evidence",
     }
-
-
-# ============================================================
-# Manual test
-# ============================================================
-
-if __name__ == "__main__":
-
-    from agent_runtime import agent_runtime
-    from document_service import process_pdf
-    from models import load_embeddings
-
-    PDF_PATH = "data/book.pdf"
-
-    print("\nLoading document for agent...")
-
-    embeddings = load_embeddings()
-
-    vector_store, document_info = process_pdf(
-        PDF_PATH,
-        embeddings,
-    )
-
-    agent_runtime.set_document(
-        vector_store=vector_store,
-        document_info=document_info,
-    )
-
-    print(f"Loaded: {document_info['name']} " f"({document_info['chunks']} chunks)")
-
-    question = input("\nAsk the agent something: ")
-
-    run_agent(question)

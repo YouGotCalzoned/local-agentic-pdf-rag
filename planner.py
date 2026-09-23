@@ -102,28 +102,61 @@ Generation system.
 
 DO NOT answer the user's question.
 
-Your task is to determine what evidence would be required from
-the knowledge base to answer the ORIGINAL USER QUESTION fully.
+Your task is to identify the MINIMUM evidence requirements
+necessary to directly answer the ORIGINAL USER QUESTION.
 
 ORIGINAL USER QUESTION:
 
 {question}
 
-Break the question into the smallest useful set of evidence
-requirements.
+Create requirements ONLY for information explicitly requested
+or logically necessary to answer what was explicitly requested.
+
+SCOPE IS STRICT.
 
 Rules:
 
 - Produce at most {MAX_EVIDENCE_REQUIREMENTS} requirements.
-- Requirements must come from the user's actual question.
-- Do not introduce unrelated topics.
-- Do not require unnecessary detail.
-- A simple question may need only one requirement.
-- A multi-part or relationship question may require several.
+- Use the SMALLEST number of requirements necessary.
+- A simple factual question should normally produce EXACTLY
+  ONE requirement.
+- Create multiple requirements only when the user's question
+  explicitly asks for multiple distinct things or asks about
+  relationships between multiple concepts.
+- Requirements must come directly from the user's actual question.
+- DO NOT expand the scope to related topics.
+- DO NOT introduce additional dimensions such as phases,
+  categories, comparisons, causes, effects, implementation
+  details, examples, exceptions, or recommendations unless
+  the user explicitly asks for them.
+- DO NOT create a requirement merely because that information
+  could make the answer more comprehensive.
+- DO NOT create requirements for information that would be
+  interesting or useful but is not necessary to answer the
+  question.
 - Each requirement should describe evidence that could be
-  supported by a passage from the source.
+  supported by the source.
 - Do not answer the question.
 - Do not generate search queries yet.
+
+Examples:
+
+Question:
+"What should be the weekly mileage for a marathon?"
+
+R1: What weekly marathon training mileage does the source recommend?
+
+Question:
+"What is cumulative fatigue?"
+
+R1: How does the source define cumulative fatigue?
+
+Question:
+"Explain how weekly mileage and cumulative fatigue relate."
+
+R1: What does the source say about weekly mileage?
+R2: What does the source say about cumulative fatigue?
+R3: How does the source connect weekly mileage with cumulative fatigue?
 
 Return EXACTLY this format:
 
@@ -131,7 +164,8 @@ R1: <requirement>
 R2: <requirement>
 R3: <requirement>
 
-Continue only as far as needed.
+Continue only as far as necessary.
+
 """
 
     response_text = invoke_llm(

@@ -611,6 +611,16 @@ Available tools:
                             {},
                         )
 
+                        new_evidence_ids = event.get(
+                            "new_evidence_ids",
+                            [],
+                        )
+
+                        stagnant_searches = event.get(
+                            "consecutive_stagnant_searches",
+                            0,
+                        )
+
                         st.markdown(f"### Step {step} — `{tool_name}`")
 
                         st.markdown("**Arguments**")
@@ -620,6 +630,32 @@ Available tools:
                         st.markdown("**Result**")
 
                         st.json(result)
+
+                        if tool_name == "search_document":
+
+                            st.markdown(
+                                "**Retrieval diagnostics**"
+                            )
+
+                            if new_evidence_ids:
+
+                                st.write(
+                                    "New evidence: "
+                                    + ", ".join(
+                                        new_evidence_ids
+                                    )
+                                )
+
+                            else:
+
+                                st.write(
+                                    "New evidence: None"
+                                )
+
+                            st.write(
+                                "Consecutive stagnant searches: "
+                                f"{stagnant_searches}"
+                            )
 
                     # --------------------------------------------
                     # Evidence coverage check
@@ -878,6 +914,33 @@ Available tools:
                         st.markdown(f"### Step {step} — Safety stop")
 
                         st.warning(event.get("content", ""))
+
+                    elif event_type == "best_effort_synthesis":
+
+                        st.markdown(
+                            f"### Step {event['step']} — "
+                            "Grounded synthesis"
+                        )
+
+                        st.caption(
+                            "The retrieval budget was exhausted. "
+                            "The agent generated the final answer from "
+                            "the accumulated document evidence."
+                        )
+
+                        st.write(event["content"])
+
+                        evidence_ids = event.get(
+                            "evidence_ids",
+                            [],
+                        )
+
+                        if evidence_ids:
+
+                            st.caption(
+                                "Evidence used: "
+                                + ", ".join(evidence_ids)
+                            )
 
                     
                     st.divider()
