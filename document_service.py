@@ -1,5 +1,6 @@
 import os
 import tempfile
+import re
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
@@ -36,6 +37,29 @@ def save_uploaded_pdf(uploaded_file):
 
         return temp_file.name
 
+
+def create_document_id(display_name):
+    """
+    Create a stable document identifier from the filename.
+
+    Example:
+
+        "NoSQL Distilled.pdf"
+            ->
+        "nosql-distilled"
+    """
+
+    name_without_extension = os.path.splitext(
+        display_name
+    )[0]
+
+    document_id = re.sub(
+        r"[^a-zA-Z0-9]+",
+        "-",
+        name_without_extension,
+    )
+
+    return document_id.strip("-").lower()
 
 # ============================================================
 # LOAD PDF
@@ -75,11 +99,19 @@ def load_pdf(
 
     if display_name:
 
+        document_id = create_document_id(
+            display_name
+        )
+
         for page in pages:
 
             page.metadata[
                 "display_name"
             ] = display_name
+
+            page.metadata[
+                "document_id"
+            ] = document_id
 
     non_empty_pages = [
         page
@@ -149,29 +181,15 @@ def build_vector_store(
     )
 
 
-# ============================================================
-# COMPLETE DOCUMENT PIPELINE
-# ============================================================
-
-def process_pdf(
+def process_pdf_to_chunks(
     pdf_path,
-    embeddings,
     display_name=None,
 ):
     """
-    Process a PDF into an in-memory FAISS index.
+    Load and chunk one PDF without building a vector store.
 
-    PDF
-     ↓
-    pages
-     ↓
-    remove empty pages
-     ↓
-    chunks
-     ↓
-    embeddings
-     ↓
-    FAISS
+    This allows chunks from multiple PDFs to be combined
+    before creating a shared FAISS index.
     """
 
     (
@@ -186,36 +204,56 @@ def process_pdf(
         non_empty_pages
     )
 
-    vector_store = (
-        build_vector_store(
-            chunks,
-            embeddings,
-        )
-    )
-
     document_info = {
         "name": (
             display_name
-            or os.path.basename(
-                pdf_path
+            or os.path.basename(pdf_path)
+        ),
+        "document_id": (
+            create_document_id(
+                display_name
+                or os.path.basename(pdf_path)
             )
         ),
-        "total_pages": len(
-            all_pages
-        ),
+        "total_pages": len(all_pages),
         "non_empty_pages": len(
             non_empty_pages
         ),
-        "chunks": len(
-            chunks
-        ),
+        "chunks": len(chunks),
     }
+
+    return chunks, document_info
+
+# ============================================================
+# COMPLETE DOCUMENT PIPELINE
+# ============================================================
+
+def process_pdf(
+    pdf_path,
+    embeddings,
+    display_name=None,
+):
+    """
+    Process one PDF into an in-memory FAISS index.
+    """
+
+    (
+        chunks,
+        document_info,
+    ) = process_pdf_to_chunks(
+        pdf_path,
+        display_name,
+    )
+
+    vector_store = build_vector_store(
+        chunks,
+        embeddings,
+    )
 
     return (
         vector_store,
         document_info,
     )
-
 
 # ============================================================
 # STREAMLIT UPLOAD PIPELINE
@@ -263,6 +301,61 @@ def process_uploaded_pdf(
                 temp_path
             )
 
+
+
+def process_uploaded_pdfs(
+    uploaded_files,
+    embeddings,
+):
+    """
+    Process multiple Streamlit UploadedFiles into one
+    shared FAISS vector store.
+    """
+
+    all_chunks = []
+    documents_info = []
+
+    for uploaded_file in uploaded_files:
+
+        temp_path = None
+
+        try:
+
+            temp_path = save_uploaded_pdf(
+                uploaded_file
+            )
+
+            (
+                chunks,
+                document_info,
+            ) = process_pdf_to_chunks(
+                temp_path,
+                display_name=uploaded_file.name,
+            )
+
+            all_chunks.extend(chunks)
+
+            documents_info.append(
+                document_info
+            )
+
+        finally:
+
+            if (
+                temp_path
+                and os.path.exists(temp_path)
+            ):
+                os.remove(temp_path)
+
+    vector_store = build_vector_store(
+        all_chunks,
+        embeddings,
+    )
+
+    return (
+        vector_store,
+        documents_info,
+    )
 
 # ============================================================
 # LOCAL TEST
