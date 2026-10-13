@@ -191,6 +191,60 @@ Before producing the answer, silently check:
 
     Am I accidentally focusing on only the most recently retrieved topic?
 
+OUTPUT RULES:
+
+Produce the answer as atomic factual statements.
+
+EVERY factual statement MUST end with one or more RAG
+source citations.
+
+Do not write an introductory factual paragraph without
+citations.
+
+Do not write an uncited summary.
+
+Do not separate a factual claim from its citation.
+
+For example:
+
+WRONG:
+
+    Inheritance can cause fragile designs.
+
+    [S1] Inheritance depends on superclass implementation.
+
+CORRECT:
+
+    Inheritance can cause fragile designs [S1].
+
+    A subclass may depend on implementation details of its
+    superclass [S1].
+
+If a statement requires evidence from multiple sources,
+cite all supporting sources:
+
+    The two approaches have different trade-offs [S1, S4].
+
+If you cannot cite a factual statement using the retrieved
+evidence, DO NOT include that statement.
+
+Do not output source labels at the beginning of statements
+such as:
+
+    [S1] Some factual statement.
+
+The citation MUST appear after the claim:
+
+    Some factual statement [S1].
+
+Before producing the answer, silently inspect EVERY factual
+statement and ask:
+
+    "Does this statement end with a valid RAG citation?"
+
+If not, either add a valid supporting citation or remove
+the statement.
+
 Then produce ONLY the answer.
 
 ANSWER:
@@ -263,31 +317,59 @@ VERIFIED FACTS
 INSTRUCTIONS
 ============================================================
 
-1. Answer the ORIGINAL USER QUESTION directly.
+1. Answer the ORIGINAL USER QUESTION using ONLY the
+   VERIFIED FACTS above.
 
-2. Use ONLY the VERIFIED FACTS above.
+2. Every factual statement in the final answer MUST be
+   directly supported by at least one VERIFIED FACT.
 
-3. Do NOT add outside knowledge.
+3. Do NOT use outside knowledge.
 
-4. Do NOT introduce a factual statement that is not present
-   in the verified facts.
+4. Do NOT infer, derive, generalize, compare, or synthesize
+   a new factual conclusion unless that conclusion itself
+   appears in the VERIFIED FACTS.
 
-5. Preserve the source citations.
+5. The ORIGINAL USER QUESTION tells you what the user wants,
+   but it is NOT evidence.
 
-6. If the question asks for several types, categories, items,
-   components, or alternatives, prioritize listing those items.
+6. Never assume that a topic mentioned in the question has
+   been verified.
 
-7. Do NOT turn the answer into an explanation of only one
-   category unless that is what the user asked.
+7. If the question asks about multiple topics, but the
+   VERIFIED FACTS contain evidence for only some of them,
+   answer only the supported parts and explicitly state
+   which requested parts could not be verified.
 
-8. If the verified facts are insufficient to fully answer the
-   original question, say so explicitly.
+8. If the question asks for a comparison, do NOT claim that
+   two things are similar or different unless the VERIFIED
+   FACTS directly support that comparison.
 
-9. Keep the answer concise.
+9. Preserve the citations exactly as they appear in the
+   VERIFIED FACTS.
 
-10. Do not explain your internal reasoning.
+10. Every factual statement must include its supporting
+    citation.
+
+11. Do NOT create a citation that does not already appear
+    in the VERIFIED FACTS.
+
+12. If there is insufficient verified evidence to answer
+    the question, say so explicitly.
+
+13. Keep the answer concise.
+
+14. Do not explain your internal reasoning.
+
+Before answering, silently check every sentence:
+
+    "Can this sentence be supported directly by one of the
+    VERIFIED FACTS?"
+
+If the answer is no, do not include that sentence.
 
 FINAL ANSWER:
+
+
 """
 
     return invoke_llm(

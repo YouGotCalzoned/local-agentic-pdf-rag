@@ -90,20 +90,20 @@ def get_document_key(document):
     """
     Build a deterministic identity for a chunk.
 
-    Page number alone is not sufficient because multiple
-    chunks may come from the same PDF page.
+    A chunk is uniquely identified by:
+
+        document_id + chunk_id
     """
 
     return (
         document.metadata.get(
-            "source",
+            "document_id",
             "",
         ),
         document.metadata.get(
-            "page",
+            "chunk_id",
             "",
         ),
-        document.page_content,
     )
 
 

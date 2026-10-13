@@ -275,15 +275,24 @@ RULES:
 
 4. Minor paraphrasing is acceptable.
 
-5. If the evidence clearly entails the claim, return:
+5. Return SUPPORTED when the claim is directly stated,
+   clearly paraphrased, or logically entailed by the cited
+   evidence.
+
+6. Do NOT require exact wording.
+
+7. Do NOT reject a claim merely because the claim is shorter,
+   more concise, or grammatically different from the evidence.
+
+8. If substantially all factual content in the claim is
+   supported by the evidence, return:
 
 SUPPORTED
 
-6. If the evidence does not clearly support the claim, return:
+9. Return UNSUPPORTED only when the claim adds a factual
+   assertion that is not supported by the cited evidence.
 
-UNSUPPORTED
-
-7. Do not explain your reasoning.
+10. Do not explain your reasoning.
 
 Return exactly ONE word:
 
@@ -417,6 +426,24 @@ def verify_claims(
         # Rule 3:
         # LLM performs only the entailment judgment.
         # -----------------------------------------------------
+
+
+        print("\n------------------------------------------")
+        print("CLAIM VERIFICATION DEBUG")
+        print("------------------------------------------")
+
+        print(
+            f"Claim {index}: {claim_text}"
+        )
+
+        print(
+            f"Citations: {source_ids}"
+        )
+
+        print("\nCITED EVIDENCE:")
+        print(cited_evidence)
+
+        print("------------------------------------------")
 
         is_supported, verification_text = (
             verify_single_claim(

@@ -9,15 +9,15 @@ from config import (
 
 def deduplicate_results(results):
     """
-    Remove duplicate chunks using page number + page text.
+    Remove duplicate chunks using document ID + chunk ID.
     """
 
     unique_results = {}
 
     for result in results:
         key = (
-            result.metadata.get("page"),
-            result.page_content,
+            result.metadata.get("document_id"),
+            result.metadata.get("chunk_id"),
         )
 
         unique_results[key] = result

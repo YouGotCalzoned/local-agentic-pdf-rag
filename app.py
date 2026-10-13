@@ -2,7 +2,7 @@ import streamlit as st
 
 from agent import run_agent
 from agent_runtime import agent_runtime
-from document_service import process_uploaded_pdf
+from document_service import process_uploaded_pdfs
 from models import load_embeddings, load_llm
 from rag import answer_question
 
@@ -77,10 +77,11 @@ with st.sidebar:
 
     st.header("Document")
 
-    uploaded_file = st.file_uploader(
-        "Upload a PDF",
-        type=["pdf"],
-    )
+    uploaded_files = st.file_uploader(
+    "Upload PDFs",
+    type=["pdf"],
+    accept_multiple_files=True,
+)
 
     st.divider()
 
@@ -101,27 +102,36 @@ with st.sidebar:
 
     if st.session_state.document_info:
 
-        info = st.session_state.document_info
+        documents_info = st.session_state.document_info
 
-        st.subheader("Loaded document")
+        st.subheader("Loaded documents")
 
-        st.write(f"**Name:** {info.get('name', 'Unknown')}")
-        st.write(f"**Pages:** {info.get('total_pages', 'Unknown')}")
-        st.write(f"**Non-empty pages:** " f"{info.get('non_empty_pages', 'Unknown')}")
-        st.write(f"**Chunks:** {info.get('chunks', 'Unknown')}")
+        for info in documents_info:
+
+            st.write(
+                f"**{info.get('name', 'Unknown')}**"
+            )
+
+            st.write(
+                f"Pages: {info.get('total_pages', 'Unknown')} | "
+                f"Chunks: {info.get('chunks', 'Unknown')}"
+            )
 
 
 # ============================================================
 # Process uploaded document
 # ============================================================
 
-if uploaded_file is not None:
+if uploaded_files:
 
     # The name + size combination is sufficient for our current
     # single-document local application.
-    current_file_key = (
-        uploaded_file.name,
-        uploaded_file.size,
+    current_file_key = tuple(
+        (
+            uploaded_file.name,
+            uploaded_file.size,
+        )
+        for uploaded_file in uploaded_files
     )
 
     if current_file_key != st.session_state.uploaded_file_key:
@@ -138,8 +148,8 @@ if uploaded_file is not None:
                 st.write("Creating embeddings...")
                 st.write("Building FAISS index...")
 
-                vector_store, document_info = process_uploaded_pdf(
-                    uploaded_file,
+                vector_store, documents_info = process_uploaded_pdfs(
+                    uploaded_files,
                     embeddings,
                 )
 
@@ -148,7 +158,7 @@ if uploaded_file is not None:
                 # ------------------------------------------------
 
                 st.session_state.vector_store = vector_store
-                st.session_state.document_info = document_info
+                st.session_state.document_info = documents_info
                 st.session_state.uploaded_file_key = current_file_key
 
                 # Clear previous answers because they belonged to
@@ -165,7 +175,7 @@ if uploaded_file is not None:
 
                 agent_runtime.set_document(
                     vector_store=vector_store,
-                    document_info=document_info,
+                    document_info=documents_info,
                 )
 
                 status.update(
@@ -217,12 +227,24 @@ if st.session_state.vector_store is None:
 # Document summary
 # ============================================================
 
-info = st.session_state.document_info
+documents_info = (
+    st.session_state.document_info
+)
+
+total_pages = sum(
+    info.get("total_pages", 0)
+    for info in documents_info
+)
+
+total_chunks = sum(
+    info.get("chunks", 0)
+    for info in documents_info
+)
 
 st.success(
-    f"Loaded **{info.get('name', 'document')}** — "
-    f"{info.get('total_pages', '?')} pages, "
-    f"{info.get('chunks', '?')} indexed chunks."
+    f"Loaded **{len(documents_info)} document(s)** — "
+    f"{total_pages} total pages, "
+    f"{total_chunks} indexed chunks."
 )
 
 
@@ -339,6 +361,11 @@ if mode == "Verified RAG":
                         source.get("id", "Source"),
                     )
 
+                    document = source.get(
+                        "document",
+                        "Unknown document",
+                    )
+
                     page = source.get("page")
 
                     text = source.get(
@@ -347,14 +374,18 @@ if mode == "Verified RAG":
                     )
 
                     if page is not None:
-                        st.markdown(f"**{source_id} — Page {page}**")
+                        st.markdown(
+                            f"**{source_id} — {document} — Page {page}**"
+                        )
                     else:
-                        st.markdown(f"**{source_id}**")
+                        st.markdown(
+                            f"**{source_id} — {document}**"
+                        )
 
-                    st.write(text)
+                    if text:
+                        st.write(text)
 
                     st.divider()
-
         # ----------------------------------------------------
         # Diagnostics
         # ----------------------------------------------------
@@ -409,18 +440,28 @@ if mode == "Verified RAG":
             st.markdown("### Coverage")
 
             if coverage_state:
+                
+                for item in coverage_state:
 
-                for key, value in coverage_state.items():
+                    requirement_id = item.get(
+                        "id",
+                        "Unknown",
+                    )
 
-                    # Handle either a simple status string or
-                    # a richer coverage object.
-                    if isinstance(value, dict):
-                        status_value = value.get(
-                            "status",
-                            str(value),
-                        )
-                    else:
-                        status_value = str(value)
+                    requirement = item.get(
+                        "requirement",
+                        "Unknown",
+                    )
+
+                    status_value = item.get(
+                        "status",
+                        "Unknown",
+                    )
+
+                    reason = item.get(
+                        "reason",
+                        "",
+                    )
 
                     normalized = status_value.upper()
 
@@ -433,7 +474,17 @@ if mode == "Verified RAG":
                     else:
                         icon = "•"
 
-                    st.write(f"{icon} **{key}** — " f"{status_value}")
+                    st.write(
+                        f"{icon} **{requirement_id}** — "
+                        f"{status_value}"
+                    )
+
+                    st.caption(requirement)
+
+                    if reason:
+                        st.caption(
+                            f"Reason: {reason}"
+                        )
 
             else:
 
