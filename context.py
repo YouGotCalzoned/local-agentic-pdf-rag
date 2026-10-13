@@ -7,9 +7,18 @@ def build_labeled_context(results):
     for index, result in enumerate(results, start=1):
         source_id = f"S{index}"
         page = result.metadata.get("page")
-        source = result.metadata.get("source")
+
+        document = (
+            result.metadata.get("display_name")
+            or result.metadata.get("source")
+            or "Unknown document"
+        )
+
         chunks.append(
-            f"[{source_id}]\nSOURCE: {source}\nPAGE: {page}\n\n{result.page_content}"
+            f"[{source_id}]\n"
+            f"DOCUMENT: {document}\n"
+            f"PAGE: {page}\n\n"
+            f"{result.page_content}"
         )
     return "\n\n".join(chunks)
 
@@ -19,6 +28,10 @@ def build_source_map(results):
     for index, result in enumerate(results, start=1):
         source_id = f"S{index}"
         page = result.metadata.get("page")
-        source = result.metadata.get("source")
+        source = (
+            result.metadata.get("display_name")
+            or result.metadata.get("source")
+            or "Unknown document"
+        )
         lines.append(f"[{source_id}] Page {page} - {source}")
     return lines

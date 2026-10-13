@@ -1,4 +1,6 @@
 import re
+import json
+
 
 from config import (
     MAX_EVIDENCE_REQUIREMENTS,
@@ -369,66 +371,156 @@ Important rules:
 - Do not answer the original question.
 - Do not invent new requirements.
 - Preserve the requirement IDs exactly.
-- A keyword appearing somewhere is not automatically enough
-  to mark a requirement COVERED.
-- Prefer PARTIAL over COVERED when evidence is incomplete.
 
-Return EXACTLY one line per requirement:
+- Evaluate whether the evidence can answer the requirement,
+  not whether it repeats the requirement's exact wording.
 
-R1|COVERED|short reason
-R2|PARTIAL|short reason
-R3|MISSING|short reason
+- Accept direct statements, clear paraphrases, and conclusions
+  that logically follow from the retrieved evidence.
+
+- If the requirement asks for a problem, consequence, limitation,
+  or tradeoff, identify whether the evidence explicitly describes
+  at least one such issue.
+
+- Mark COVERED when the retrieved evidence is sufficient to
+  construct a specific, grounded answer to the requirement.
+
+- Mark PARTIAL when relevant evidence exists but a necessary
+  detail is missing.
+
+- Mark MISSING only when no retrieved passage provides
+  evidence capable of answering the requirement.
+
+- Do not mark COVERED merely because related keywords appear.
+
+Return ONLY a valid JSON object.
+
+The JSON object must contain a "coverage" array.
+
+Each element must contain:
+- "id": the original requirement ID
+- "status": one of COVERED, PARTIAL, MISSING
+- "reason": a short explanation
+
+Example:
+
+{{
+  "coverage": [
+    {{
+      "id": "R1",
+      "status": "COVERED",
+      "reason": "The retrieved evidence directly supports R1."
+    }}
+  ]
+}}
+
+Rules:
+- Return valid JSON only.
+- Do not include Markdown code fences.
+- Do not include explanatory text outside JSON.
+- Include exactly one entry for each provided requirement.
+- Do not invent additional requirement IDs.
 """
+
+
+    print("\n------------------------------------------", flush=True)
+    print("COVERAGE EVALUATION PROMPT", flush=True)
+    print("------------------------------------------", flush=True)
+    print(prompt, flush=True)
+    print("------------------------------------------", flush=True)
 
     response_text = invoke_llm(
         llm,
         prompt,
     )
 
+    print("\n------------------------------------------", flush=True)
+    print("RAW COVERAGE RESPONSE", flush=True)
+    print("------------------------------------------", flush=True)
+    print(response_text, flush=True)
+    print("------------------------------------------", flush=True)
+
     parsed_statuses = {}
 
-    for line in response_text.splitlines():
+    try:
+        decoder = json.JSONDecoder()
 
-        line = line.strip()
+        response_data = None
 
-        parts = line.split(
-            "|",
-            2,
-        )
+        for index, character in enumerate(response_text):
 
-        if len(parts) < 2:
-            continue
+            if character != "{":
+                continue
 
-        requirement_id = (
-            parts[0]
-            .strip()
-            .upper()
-        )
+            try:
+                candidate, _ = decoder.raw_decode(
+                    response_text[index:]
+                )
 
-        status = (
-            parts[1]
-            .strip()
-            .upper()
-        )
+                if (
+                    isinstance(candidate, dict)
+                    and "coverage" in candidate
+                ):
+                    response_data = candidate
+                    break
 
-        reason = ""
+            except json.JSONDecodeError:
+                continue
 
-        if len(parts) == 3:
-            reason = parts[2].strip()
+        if response_data is None:
+            raise ValueError(
+                "No valid coverage JSON object found"
+            )
 
-        if status not in {
+        coverage_items = response_data["coverage"]
+
+        if not isinstance(coverage_items, list):
+            raise ValueError("Coverage must be a list")
+
+        valid_requirement_ids = {
+            requirement["id"]
+            for requirement in requirements
+        }
+
+        valid_statuses = {
             "COVERED",
             "PARTIAL",
             "MISSING",
-        }:
-            continue
-
-        parsed_statuses[
-            requirement_id
-        ] = {
-            "status": status,
-            "reason": reason,
         }
+
+        for item in coverage_items:
+
+            if not isinstance(item, dict):
+                continue
+
+            requirement_id = str(
+                item.get("id", "")
+            ).strip().upper()
+
+            status = str(
+                item.get("status", "")
+            ).strip().upper()
+
+            reason = str(
+                item.get("reason", "")
+            ).strip()
+
+            if requirement_id not in valid_requirement_ids:
+                continue
+
+            if status not in valid_statuses:
+                continue
+
+            parsed_statuses[requirement_id] = {
+                "status": status,
+                "reason": reason,
+            }
+
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        print(
+            f"Coverage JSON parsing failed: {exc}",
+            flush=True,
+        )
 
     # --------------------------------------------------------
     # Build deterministic state using OUR requirement list.

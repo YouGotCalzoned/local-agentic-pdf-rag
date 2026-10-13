@@ -361,6 +361,11 @@ if mode == "Verified RAG":
                         source.get("id", "Source"),
                     )
 
+                    document = source.get(
+                        "document",
+                        "Unknown document",
+                    )
+
                     page = source.get("page")
 
                     text = source.get(
@@ -369,14 +374,18 @@ if mode == "Verified RAG":
                     )
 
                     if page is not None:
-                        st.markdown(f"**{source_id} — Page {page}**")
+                        st.markdown(
+                            f"**{source_id} — {document} — Page {page}**"
+                        )
                     else:
-                        st.markdown(f"**{source_id}**")
+                        st.markdown(
+                            f"**{source_id} — {document}**"
+                        )
 
-                    st.write(text)
+                    if text:
+                        st.write(text)
 
                     st.divider()
-
         # ----------------------------------------------------
         # Diagnostics
         # ----------------------------------------------------
@@ -431,18 +440,28 @@ if mode == "Verified RAG":
             st.markdown("### Coverage")
 
             if coverage_state:
+                
+                for item in coverage_state:
 
-                for key, value in coverage_state.items():
+                    requirement_id = item.get(
+                        "id",
+                        "Unknown",
+                    )
 
-                    # Handle either a simple status string or
-                    # a richer coverage object.
-                    if isinstance(value, dict):
-                        status_value = value.get(
-                            "status",
-                            str(value),
-                        )
-                    else:
-                        status_value = str(value)
+                    requirement = item.get(
+                        "requirement",
+                        "Unknown",
+                    )
+
+                    status_value = item.get(
+                        "status",
+                        "Unknown",
+                    )
+
+                    reason = item.get(
+                        "reason",
+                        "",
+                    )
 
                     normalized = status_value.upper()
 
@@ -455,7 +474,17 @@ if mode == "Verified RAG":
                     else:
                         icon = "•"
 
-                    st.write(f"{icon} **{key}** — " f"{status_value}")
+                    st.write(
+                        f"{icon} **{requirement_id}** — "
+                        f"{status_value}"
+                    )
+
+                    st.caption(requirement)
+
+                    if reason:
+                        st.caption(
+                            f"Reason: {reason}"
+                        )
 
             else:
 

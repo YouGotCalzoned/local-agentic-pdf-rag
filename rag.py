@@ -17,6 +17,7 @@ from context import (
 from retrieval import (
     initial_search,
     run_follow_up_searches,
+    deduplicate_results,
 )
 
 from planner import (
@@ -187,6 +188,21 @@ def run_agentic_retrieval(
         question,
     )
 
+    for requirement in requirements:
+
+        requirement_results = initial_search(
+            vector_store,
+            requirement["requirement"],
+        )
+
+        all_results.extend(
+            requirement_results
+        )
+
+    all_results = deduplicate_results(
+        all_results
+    )
+    
     # --------------------------------------------------------
     # Deterministic out-of-domain exit.
     # --------------------------------------------------------
